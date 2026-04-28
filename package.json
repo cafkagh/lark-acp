@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Lark/Feishu bot that bridges chat messages to ACP-compatible coding agents (codex, claude code, ...).",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "lark-acp": "bin/lark-acp"
