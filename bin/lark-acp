@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# lark-acp launcher
+#
+# Responsibilities mirror the original lark-bot-ts wrapper:
+# - Self-locate the project dir from this script's own path (works from
+#   install location, symlink, or direct invocation).
+# - Preserve the user's invocation CWD in LARK_ACP_WORKDIR so per-chat state
+#   (workdir map, session bindings, log) lives under where the user ran us.
+# - Optionally load a .env file from either $PWD or the project dir.
+# - Auto-restart when the bot exits with code 99 (used for /restart).
+# - Exit immediately on any other exit code (error surfaces clearly).
+
+set -e
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  case "$SOURCE" in /*) ;; *) SOURCE="$DIR/$SOURCE" ;; esac
+done
+BIN_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+# Project root (where node_modules + src live). Independent of BOT_HOME, which
+# is a separate user-state directory (~/.lark-acp by default).
+PROJECT_ROOT="${LARK_ACP_PROJECT_ROOT:-$(cd "$BIN_DIR/.." && pwd)}"
+
+load_env() {
+  local f="$1"
+  [ -f "$f" ] || return 0
+  # shellcheck disable=SC1090
+  set -a; . "$f"; set +a
+}
+
+TSX="$PROJECT_ROOT/node_modules/.bin/tsx"
+ENTRY="$PROJECT_ROOT/src/index.ts"
+
+if [ ! -x "$TSX" ]; then
+  echo "[lark-acp] tsx not found at $TSX" >&2
+  echo "[lark-acp] did you run 'npm install' in $PROJECT_ROOT?" >&2
+  exit 127
+fi
+if [ ! -f "$ENTRY" ]; then
+  echo "[lark-acp] entry not found at $ENTRY" >&2
+  exit 127
+fi
+
+set +e
+while true; do
+  if [ -f "$PWD/.env" ]; then
+    load_env "$PWD/.env"
+  elif [ -f "$PROJECT_ROOT/.env" ]; then
+    load_env "$PROJECT_ROOT/.env"
+  fi
+  "$TSX" "$ENTRY" "$@"
+  rc=$?
+  if [ "$rc" -ne 99 ]; then
+    exit "$rc"
+  fi
+  echo "[lark-acp wrapper] restarting (rc=99)..." >&2
+  sleep 1
+done
