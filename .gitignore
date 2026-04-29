@@ -6,3 +6,18 @@ dist/
 .env.*.local
 .DS_Store
 *.tsbuildinfo
+
+# Runtime artifacts (would appear if LARK_ACP_HOME=. or attachments
+# are saved into the project dir during dev). Defensive — don't accidentally
+# commit user data.
+.lark-bot-attachments/
+.lark-acp-attachments/
+.restart-notify.json
+chat-workdirs.json
+chat-shellcwds.json
+chat-modes.json
+chat-acl.json
+chat-agents.json
+chat-models.json
+chat-bot-allowlist.json
+lark-acp-sessions/
