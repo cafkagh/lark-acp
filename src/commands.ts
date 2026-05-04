@@ -642,51 +642,48 @@ async function cmdUpdate(ctx: CmdContext): Promise<void> {
     return;
   }
 
-  await replyText(ctx.messageId, `⬇️ fetching origin/main (${projDir})…`);
-
-  const fetched = await runGit(projDir, ["fetch", "origin", "main"]);
-  if (fetched.code !== 0) {
-    await replyText(ctx.messageId, `❌ fetch failed (exit ${fetched.code})\n${(fetched.stderr || fetched.stdout).slice(0, 600)}`);
-    log(`[update] ${ctx.chatId} fetch rc=${fetched.code}`);
+  // Detect current branch — /update fast-forwards whatever branch the
+  // deployment is checked out on. Don't assume main vs master.
+  const br = await runGit(projDir, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  const branch = br.stdout.trim();
+  if (!branch || branch === "HEAD") {
+    await replyText(ctx.messageId, `❌ detached HEAD or unknown branch — checkout a branch first`);
+    log(`[update] ${ctx.chatId} no branch (HEAD detached)`);
     return;
   }
 
-  const br = await runGit(projDir, ["rev-parse", "--abbrev-ref", "HEAD"]);
-  const branch = br.stdout.trim();
+  await replyText(ctx.messageId, `⬇️ fetching origin/${branch} (${projDir})…`);
 
-  if (branch !== "main") {
-    const co = await runGit(projDir, ["checkout", "main"]);
-    if (co.code !== 0) {
-      await replyText(ctx.messageId, `❌ cannot checkout main from '${branch}'\n${(co.stderr || co.stdout).slice(0, 500)}`);
-      log(`[update] ${ctx.chatId} checkout main failed from ${branch}`);
-      return;
-    }
+  const fetched = await runGit(projDir, ["fetch", "origin", branch]);
+  if (fetched.code !== 0) {
+    await replyText(ctx.messageId, `❌ fetch origin/${branch} failed (exit ${fetched.code})\n${(fetched.stderr || fetched.stdout).slice(0, 600)}`);
+    log(`[update] ${ctx.chatId} fetch rc=${fetched.code} branch=${branch}`);
+    return;
   }
 
-  const merged = await runGit(projDir, ["merge", "--ff-only", "origin/main"]);
+  const merged = await runGit(projDir, ["merge", "--ff-only", `origin/${branch}`]);
   const combined = [merged.stdout, merged.stderr].map((s) => s.trim()).filter(Boolean).join("\n");
   if (merged.code !== 0) {
-    await replyText(ctx.messageId, `❌ merge --ff-only origin/main failed (exit ${merged.code})\n${combined.slice(0, 600)}`);
-    log(`[update] ${ctx.chatId} merge rc=${merged.code}`);
+    await replyText(ctx.messageId, `❌ merge --ff-only origin/${branch} failed (exit ${merged.code})\n${combined.slice(0, 600)}`);
+    log(`[update] ${ctx.chatId} merge rc=${merged.code} branch=${branch}`);
     return;
   }
 
   const upToDate = /already up to date/i.test(combined) || combined === "";
-  if (upToDate && branch === "main") {
-    await replyText(ctx.messageId, "ℹ️ already up to date (on main)");
-    log(`[update] ${ctx.chatId} up-to-date`);
+  if (upToDate) {
+    await replyText(ctx.messageId, `ℹ️ already up to date (on ${branch})`);
+    log(`[update] ${ctx.chatId} up-to-date branch=${branch}`);
     return;
   }
 
-  const branchSwitch = branch === "main" ? "" : `\nswitched: ${branch} → main`;
   const depsChanged = /package(-lock)?\.json/.test(combined);
   const depsHint = depsChanged ? "\n⚠️ package*.json changed — may need npm install" : "";
 
   await replyText(
     ctx.messageId,
-    `✅ updated, restarting…${branchSwitch}\n${combined.slice(0, 400)}${depsHint}`,
+    `✅ updated, restarting… (branch ${branch})\n${combined.slice(0, 400)}${depsHint}`,
   );
-  log(`[update] ${ctx.chatId} updated from ${branch}, restarting (depsChanged=${depsChanged})`);
+  log(`[update] ${ctx.chatId} updated branch=${branch}, restarting (depsChanged=${depsChanged})`);
 
   setImmediate(() => {
     _shutdown?.({
