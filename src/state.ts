@@ -5,7 +5,7 @@ import { log } from "./log.js";
 import {
   BOT_HOME, DEFAULT_CHAT_WORKDIR,
   ALLOWED_OPEN_IDS, DEFAULT_REPLY_MODE, ReplyMode,
-  AGENT_DEFAULT,
+  AGENT_DEFAULT, CHAT_BOT_MSG_LIMIT,
 } from "./config.js";
 import { atomicWriteFile } from "./lock.js";
 
@@ -124,6 +124,78 @@ export function shellCwdFor(chatId: string): string {
 export function setShellCwd(chatId: string, cwd: string) {
   shellCwds[chatId] = cwd;
   saveShellCwds();
+}
+
+// ---------- chat_id → recent bot-sent messages (recall ring buffer) ----------
+// Used by the reaction-driven recall path (react with 🗑️ to recall a bot
+// message). We keep last N per chat so we can look up by msgId in O(N),
+// check who triggered the original reply, and delete via Feishu API. Older
+// entries fall off — reactions on those just no-op.
+export type SentBotMsg = {
+  msgId: string;
+  sentAt: number;        // unix ms
+  kind: "card" | "text";
+  triggerOpenId: string; // who's prompt/cmd produced this; "" = system (e.g. restart ack)
+  brief: string;         // first 80 chars; for /jobs-style listing if ever needed
+};
+const CHAT_BOT_MSGS_FILE = join(BOT_HOME, "chat-bot-msgs.json");
+function loadChatBotMsgs(): Record<string, SentBotMsg[]> {
+  if (!existsSync(CHAT_BOT_MSGS_FILE)) return {};
+  try {
+    const obj = JSON.parse(readFileSync(CHAT_BOT_MSGS_FILE, "utf8")) ?? {};
+    const out: Record<string, SentBotMsg[]> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (Array.isArray(v)) out[k] = v.filter((x: any) => x && typeof x.msgId === "string");
+    }
+    return out;
+  } catch (e: any) {
+    log(`chat-bot-msgs parse err: ${e?.message}`);
+    return {};
+  }
+}
+export const chatBotMsgs = loadChatBotMsgs();
+let saveBotMsgsTimer: NodeJS.Timeout | null = null;
+function scheduleSaveChatBotMsgs(): void {
+  // Coalesce frequent appends (streaming card sends N PATCHes mostly, but
+  // each user prompt produces 1 entry; still, avoid per-write fsync churn).
+  if (saveBotMsgsTimer) return;
+  saveBotMsgsTimer = setTimeout(() => {
+    saveBotMsgsTimer = null;
+    try {
+      atomicWriteFile(CHAT_BOT_MSGS_FILE, JSON.stringify(chatBotMsgs, null, 2));
+    } catch (e: any) {
+      log(`chat-bot-msgs save err: ${e?.message}`);
+    }
+  }, 500);
+  saveBotMsgsTimer.unref();
+}
+export function recordBotMsg(chatId: string, entry: SentBotMsg): void {
+  if (!entry.msgId || !chatId) return;
+  const list = chatBotMsgs[chatId] ?? [];
+  // Skip duplicate (e.g. card msgId reported twice from streaming flush).
+  if (list.some((e) => e.msgId === entry.msgId)) return;
+  list.push(entry);
+  if (list.length > CHAT_BOT_MSG_LIMIT) list.splice(0, list.length - CHAT_BOT_MSG_LIMIT);
+  chatBotMsgs[chatId] = list;
+  scheduleSaveChatBotMsgs();
+}
+export function findBotMsg(msgId: string): { chatId: string; entry: SentBotMsg } | null {
+  for (const [chatId, list] of Object.entries(chatBotMsgs)) {
+    const entry = list.find((e) => e.msgId === msgId);
+    if (entry) return { chatId, entry };
+  }
+  return null;
+}
+export function removeBotMsg(msgId: string): void {
+  for (const [chatId, list] of Object.entries(chatBotMsgs)) {
+    const idx = list.findIndex((e) => e.msgId === msgId);
+    if (idx >= 0) {
+      list.splice(idx, 1);
+      if (list.length === 0) delete chatBotMsgs[chatId];
+      scheduleSaveChatBotMsgs();
+      return;
+    }
+  }
 }
 
 // ---------- chat_id → preferred model id (per agent) ----------

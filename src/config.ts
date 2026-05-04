@@ -46,6 +46,18 @@ export const AGENT_CANCEL_GRACE_MS = Number(process.env.AGENT_CANCEL_GRACE_MS ??
 
 export const TYPING_EMOJI = process.env.TYPING_EMOJI ?? "Typing";
 
+// Reaction emoji that triggers recalling a bot message. Whoever originally
+// triggered the bot reply (or any global ACL member) can react with this
+// emoji on the bot card / text reply to delete it. See state.ts:chatBotMsgs
+// for the per-chat ring buffer of recallable messages.
+export const RECALL_EMOJI = process.env.RECALL_EMOJI ?? "TrashCan";
+// Last N bot messages tracked per chat for recall lookup. Older entries
+// fall off the ring; recall by reaction on those just no-ops.
+export const CHAT_BOT_MSG_LIMIT = Number(process.env.CHAT_BOT_MSG_LIMIT ?? 20);
+// Feishu's bot-recall API rejects messages older than ~24h. Don't even try
+// past this window — surface a clear failure instead.
+export const RECALL_MAX_AGE_MS = Number(process.env.RECALL_MAX_AGE_MS ?? 24 * 60 * 60 * 1000);
+
 // ---------- reply mode ----------
 export type ReplyMode = "strict" | "owner" | "all";
 const DEFAULT_REPLY_MODE_RAW = (process.env.REPLY_MODE ?? "strict").toLowerCase();

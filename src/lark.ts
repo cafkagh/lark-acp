@@ -26,6 +26,19 @@ export async function replyText(messageId: string, text: string) {
   });
 }
 
+// Recall a previously-sent bot message. Wraps Feishu's DELETE message API.
+// Bots can only recall their own messages, and Feishu enforces a ~24h
+// window (caller should pre-check sentAt before invoking, but we still
+// surface the API error if it slips through).
+export async function recallMessage(messageId: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await larkApi("DELETE", `/open-apis/im/v1/messages/${messageId}`);
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? String(e) };
+  }
+}
+
 export async function addReaction(messageId: string, emoji: string): Promise<string | null> {
   try {
     const r = await larkApi(

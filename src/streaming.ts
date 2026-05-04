@@ -1,5 +1,6 @@
 import { larkApi } from "./lark.js";
 import { log } from "./log.js";
+import { recordBotMsg } from "./state.js";
 
 // Per-chat cumulative cost (live, resets on restart). Used by /status footer.
 export const chatCostUsd = new Map<string, number>();
@@ -293,11 +294,20 @@ export class StreamingReplier {
     return bits.length ? `_${bits.join(" · ")}_` : "";
   }
 
+  // Small hint shown on the FINAL render (after close) so users discover
+  // the reaction-based recall path. Quiet italic so it doesn't compete
+  // with the substantive footer.
+  private recallHint(): string {
+    return "_🗑️ 反应可撤回_";
+  }
+
   private render(): string {
     if (this.finalText !== null) {
       const footer = this.renderFooter();
-      return footer
-        ? `${this.finalText || "▌"}\n\n${footer}`
+      const hint = this.recallHint();
+      const tail = [footer, hint].filter(Boolean).join(" · ");
+      return tail
+        ? `${this.finalText || "▌"}\n\n${tail}`
         : (this.finalText || "▌");
     }
 
@@ -337,6 +347,12 @@ export class StreamingReplier {
 
     const footer = this.renderFooter();
     if (footer) parts.push(footer);
+    // Streaming branch: show recall hint only after we've emitted real
+    // content (avoid clutter on the first heartbeat blip). Inline with
+    // footer so the hint doesn't add a whole new paragraph.
+    if (this.bodyText || this.toolEntries.length) {
+      parts[parts.length - 1] = `${parts[parts.length - 1]} · ${this.recallHint()}`;
+    }
 
     return parts.join("\n\n") || "▌";
   }
@@ -352,6 +368,17 @@ export class StreamingReplier {
       if (!this.msgId) {
         const resp = await replyCard(this.userMessageId, text, opts);
         this.msgId = resp?.data?.message_id ?? null;
+        // Track for reaction-driven recall. senderId is the user whose
+        // prompt produced this card; only they (or an admin) can recall.
+        if (this.msgId) {
+          recordBotMsg(this.chatId, {
+            msgId: this.msgId,
+            sentAt: Date.now(),
+            kind: "card",
+            triggerOpenId: this.senderId,
+            brief: (this.bodyText || this.finalText || "").slice(0, 80).replace(/\s+/g, " "),
+          });
+        }
       } else {
         await updateCard(this.msgId, text, opts);
       }

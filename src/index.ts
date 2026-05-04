@@ -10,17 +10,19 @@ import {
   BOT_APP_ID, setBotAppId,
   ALLOWED_OPEN_IDS, ACL_ENABLED,
   AGENT_DEFAULT,
+  RECALL_EMOJI, RECALL_MAX_AGE_MS,
 } from "./config.js";
 import {
   larkApi, replyText, addReaction, delReaction,
   parseMessagePayload, rememberChatName, chatNameOf,
+  recallMessage,
 } from "./lark.js";
 import { StreamingReplier } from "./streaming.js";
 import { acquireLock, releaseLock } from "./lock.js";
 import { startSubscribe, sweepOrphanLarkCli } from "./subscribe.js";
 import {
   chatWorkdirs, workdirFor, modeForChat, isAllowedIn, agentForChat,
-  isBotAllowedIn,
+  isBotAllowedIn, findBotMsg, removeBotMsg,
 } from "./state.js";
 import { COMMANDS, registerShutdown } from "./commands.js";
 import {
@@ -107,6 +109,13 @@ function dispatchLine(line: string): void {
     if (eventType === "card.action.trigger") {
       const p = handleCardAction(rawParsed).catch((e) =>
         log(`card-action crash: ${e?.stack ?? e}`));
+      inflight.add(p);
+      p.finally(() => inflight.delete(p));
+      return;
+    }
+    if (eventType === "im.message.reaction.created_v1") {
+      const p = handleReactionEvent(rawParsed).catch((e) =>
+        log(`reaction crash: ${e?.stack ?? e}`));
       inflight.add(p);
       p.finally(() => inflight.delete(p));
       return;
@@ -229,6 +238,59 @@ async function handleCardAction(raw: any): Promise<void> {
     return;
   }
   log(`[card-action] unknown action=${act} chat=${chatId}`);
+}
+
+// Reaction-driven recall: user reacts with RECALL_EMOJI on a bot message
+// → bot deletes that message via Feishu API. Permission: only the user
+// whose prompt produced the message (triggerOpenId) or any global ACL
+// admin can recall. Other reactions are no-ops.
+async function handleReactionEvent(raw: any): Promise<void> {
+  const event = raw?.event;
+  // Reaction event payload shape (v1):
+  //   message_id: "om_xxx"
+  //   reaction_type: { emoji_type: "TrashCan" }
+  //   operator_type: "user"
+  //   user_id: { open_id: "ou_xxx", ... }   (or operator.open_id depending on version)
+  // Be tolerant of either shape — Feishu has shipped both.
+  const msgId: string = event?.message_id ?? "";
+  const emoji: string = event?.reaction_type?.emoji_type ?? "";
+  const operatorId: string =
+    event?.user_id?.open_id ?? event?.operator?.open_id ?? "";
+  if (!msgId || !emoji || !operatorId) {
+    log(`[reaction] dropped: missing fields msg=${msgId} emoji=${emoji} op=${operatorId}`);
+    return;
+  }
+  if (emoji !== RECALL_EMOJI) {
+    // Not the recall trigger — ignore quietly.
+    return;
+  }
+  const found = findBotMsg(msgId);
+  if (!found) {
+    // Reaction on a message we don't track (old card past ring buffer,
+    // or non-bot message). Nothing to do.
+    return;
+  }
+  const { chatId, entry } = found;
+  const isAdmin = ALLOWED_OPEN_IDS.has(operatorId);
+  const isTrigger = entry.triggerOpenId && operatorId === entry.triggerOpenId;
+  if (!isAdmin && !isTrigger) {
+    log(`[recall] ${chatId} denied: operator=${operatorId} is not trigger=${entry.triggerOpenId}`);
+    return;
+  }
+  const ageMs = Date.now() - entry.sentAt;
+  if (ageMs > RECALL_MAX_AGE_MS) {
+    log(`[recall] ${chatId} expired: msg=${msgId} age=${Math.round(ageMs / 1000)}s`);
+    return;
+  }
+  const r = await recallMessage(msgId);
+  if (r.ok) {
+    removeBotMsg(msgId);
+    log(`[recall] ${chatId} ok msg=${msgId} by ${operatorId} (${entry.kind} age=${Math.round(ageMs / 1000)}s)`);
+  } else {
+    // API failure (likely message_too_old or permission issue) — keep the
+    // entry; user can retry. Log so admins can see why.
+    log(`[recall] ${chatId} FAILED msg=${msgId} by ${operatorId}: ${r.error}`);
+  }
 }
 
 async function handleEvent(line: string) {

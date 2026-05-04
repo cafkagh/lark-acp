@@ -66,7 +66,7 @@ export function startSubscribe(opts: {
 
   const retryStateAtStart = loadRetryState();
   const subArgs = ["event", "+subscribe",
-    "--event-types", "im.message.receive_v1,card.action.trigger",
+    "--event-types", "im.message.receive_v1,card.action.trigger,im.message.reaction.created_v1",
     "--quiet", "--as", "bot"];
   if (retryStateAtStart.count > 0) {
     subArgs.push("--force");

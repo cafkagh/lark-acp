@@ -18,6 +18,7 @@ import {
   expandPath,
   agentForChat, setAgentForChat,
   modelPrefForChat, setModelPrefForChat, clearModelPrefForChat,
+  recordBotMsg,
 } from "./state.js";
 import {
   SessionInfo, projDirFor,
@@ -35,6 +36,24 @@ import {
   readPersistedSessionId,
 } from "./agents/client.js";
 import { listBackends, getBackend, getDefaultBackend, isKnownBackend } from "./agents/registry.js";
+
+// ---------- reply helper that tracks for recall ----------
+// Wraps replyText so every command's text reply is registered in the
+// per-chat ring buffer; the original triggerer (or admins) can then
+// recall via reaction. Use this for text replies; cards from
+// StreamingReplier already register themselves on first PATCH.
+async function replyAndTrack(ctx: CmdContext, text: string) {
+  const resp = await replyText(ctx.messageId, text);
+  const msgId = resp?.data?.message_id;
+  if (msgId) {
+    recordBotMsg(ctx.chatId, {
+      msgId, sentAt: Date.now(), kind: "text",
+      triggerOpenId: ctx.senderId,
+      brief: text.slice(0, 80).replace(/\s+/g, " "),
+    });
+  }
+  return resp;
+}
 
 // ---------- shutdown registration ----------
 type ShutdownOpts = {
@@ -115,7 +134,7 @@ async function cmdShell(ctx: CmdContext): Promise<void> {
   const cmd = (ctx.match[1] ?? "").trim();
   const curCwd = shellCwdFor(ctx.chatId);
   if (!cmd) {
-    await replyText(ctx.messageId, `usage: !<shell command>\nshell cwd: ${curCwd}`);
+    await replyAndTrack(ctx, `usage: !<shell command>\nshell cwd: ${curCwd}`);
     return;
   }
   const rid = await addReaction(ctx.messageId, TYPING_EMOJI);
@@ -137,7 +156,7 @@ async function cmdShell(ctx: CmdContext): Promise<void> {
     await r.close(parts.join("\n"));
     log(`[!] ${ctx.chatId} exit=${res.exitCode} cwd=${res.newCwd} cmd=${cmd.slice(0, 80)}`);
   } catch (e: any) {
-    await replyText(ctx.messageId, `❌ shell error: ${e?.message ?? e}`);
+    await replyAndTrack(ctx, `❌ shell error: ${e?.message ?? e}`);
     log(`[!] ${ctx.chatId} error: ${e?.stack ?? e}`);
   } finally {
     await delReaction(ctx.messageId, rid);
@@ -145,7 +164,7 @@ async function cmdShell(ctx: CmdContext): Promise<void> {
 }
 
 async function cmdHelp(ctx: CmdContext): Promise<void> {
-  await replyText(ctx.messageId, HELP_TEXT);
+  await replyAndTrack(ctx, HELP_TEXT);
 }
 
 async function cmdPwd(ctx: CmdContext): Promise<void> {
@@ -160,7 +179,7 @@ async function cmdPwd(ctx: CmdContext): Promise<void> {
     lines.push("");
     lines.push("⚠️ 两者已分叉 — /new 改 agent cwd（也可用 !shell cwd 隐式切）；!cd 只改 shell cwd。");
   }
-  await replyText(ctx.messageId, lines.join("\n"));
+  await replyAndTrack(ctx, lines.join("\n"));
 }
 
 async function cmdAgent(ctx: CmdContext): Promise<void> {
@@ -171,26 +190,24 @@ async function cmdAgent(ctx: CmdContext): Promise<void> {
       const star = b.name === cur ? " ←" : "";
       return `- \`${b.name}\` (${b.label})${star}`;
     }).join("\n");
-    await replyText(
-      ctx.messageId,
+    await replyAndTrack(ctx,
       `**当前 agent**: \`${cur}\`\n**全局默认**: \`${AGENT_DEFAULT}\`\n\n**可用 agents**:\n${all}\n\n用法：\`/agent <name>\` 切换；\`/agent reset\` 恢复默认。`,
     );
     return;
   }
   if (arg === "reset" || arg === "default") {
     setAgentForChat(ctx.chatId, AGENT_DEFAULT);
-    await replyText(ctx.messageId, `✅ 本会话 agent 恢复默认：\`${AGENT_DEFAULT}\``);
+    await replyAndTrack(ctx, `✅ 本会话 agent 恢复默认：\`${AGENT_DEFAULT}\``);
     log(`[agent] ${ctx.chatId} reset → ${AGENT_DEFAULT}`);
     return;
   }
   if (!isKnownBackend(arg)) {
     const known = listBackends().map((b) => `\`${b.name}\``).join(", ");
-    await replyText(ctx.messageId, `❌ 未知 agent：\`${arg}\`。可选：${known}`);
+    await replyAndTrack(ctx, `❌ 未知 agent：\`${arg}\`。可选：${known}`);
     return;
   }
   setAgentForChat(ctx.chatId, arg);
-  await replyText(
-    ctx.messageId,
+  await replyAndTrack(ctx,
     `✅ 本会话 agent 已切到：\`${arg}\`\n（不同 agent 各自维护 session；切换不会清掉旧 agent 的 session）`,
   );
   log(`[agent] ${ctx.chatId} → ${arg}`);
@@ -210,15 +227,14 @@ async function cmdModel(ctx: CmdContext): Promise<void> {
   try {
     sid = await inst.ensureSession(ctx.chatId);
   } catch (e: any) {
-    await replyText(ctx.messageId, `❌ 无法初始化 ${curAgent} session: ${e?.message ?? e}`);
+    await replyAndTrack(ctx, `❌ 无法初始化 ${curAgent} session: ${e?.message ?? e}`);
     return;
   }
   const state = inst.getModelState(ctx.chatId);
 
   if (!arg) {
     if (!state) {
-      await replyText(
-        ctx.messageId,
+      await replyAndTrack(ctx,
         `**当前 agent**: \`${curAgent}\` (${backend.label})\n\n⚠️ agent 没暴露可选模型（init 时没返回 models 块）。\n` +
         `这个 backend 不支持运行时切模型，去改它的原生配置文件后 \`/restart\`。`,
       );
@@ -232,8 +248,7 @@ async function cmdModel(ctx: CmdContext): Promise<void> {
     const prefLine = pref
       ? `\n本会话偏好：\`${pref}\`（每次新 session 会自动应用）`
       : `\n本会话偏好：（未设置，跟随 agent 默认）`;
-    await replyText(
-      ctx.messageId,
+    await replyAndTrack(ctx,
       `**${backend.label} 可选模型** (sid \`${sid.slice(0, 8)}\`)\n${lines}${prefLine}\n\n` +
       `用法：\`/model <modelId>\` 切换；\`/model reset\` 清掉偏好。`,
     );
@@ -243,8 +258,7 @@ async function cmdModel(ctx: CmdContext): Promise<void> {
   if (arg === "reset" || arg === "default") {
     clearModelPrefForChat(ctx.chatId, curAgent);
     const cur = state?.currentModelId ?? "(unknown)";
-    await replyText(
-      ctx.messageId,
+    await replyAndTrack(ctx,
       `✅ 本会话 ${curAgent} 模型偏好已清除（agent 当前在 \`${cur}\`，下次新 session 跟随默认）`,
     );
     log(`[model] ${ctx.chatId} agent=${curAgent} reset`);
@@ -252,20 +266,19 @@ async function cmdModel(ctx: CmdContext): Promise<void> {
   }
 
   if (!state) {
-    await replyText(ctx.messageId, `❌ agent \`${curAgent}\` 不支持运行时切模型`);
+    await replyAndTrack(ctx, `❌ agent \`${curAgent}\` 不支持运行时切模型`);
     return;
   }
 
   try {
     await inst.setModel(ctx.chatId, arg);
     setModelPrefForChat(ctx.chatId, curAgent, arg);
-    await replyText(
-      ctx.messageId,
+    await replyAndTrack(ctx,
       `✅ ${backend.label} 模型已切到 \`${arg}\`（已保存为本会话偏好）`,
     );
     log(`[model] ${ctx.chatId} agent=${curAgent} → ${arg}`);
   } catch (e: any) {
-    await replyText(ctx.messageId, `❌ 切换失败: ${e?.message ?? e}`);
+    await replyAndTrack(ctx, `❌ 切换失败: ${e?.message ?? e}`);
     log(`[model] ${ctx.chatId} agent=${curAgent} set ${arg} FAILED: ${e?.message}`);
   }
 }
@@ -281,15 +294,14 @@ async function cmdAcl(ctx: CmdContext): Promise<void> {
     const local = perChat.length
       ? perChat.map((id) => `  · \`${id}\``).join("\n")
       : "  _(无)_";
-    await replyText(
-      ctx.messageId,
+    await replyAndTrack(ctx,
       `**当前 chat 的 ACL 状态**\n\n全局允许（env \`ALLOWED_OPEN_IDS\`，可修改 ACL）：\n${global}\n\n本会话额外允许（仅可使用 bot，不可改 ACL）：\n${local}\n\n用法：\n\`/acl add @某人\`   加人（可以 @，也可以直接给 open_id）\n\`/acl rm  @某人\`   删人\n\`/acl clear\`     清空本会话额外名单`,
     );
     return;
   }
 
   if (!isGlobalAdmin) {
-    await replyText(ctx.messageId, `❌ 只有全局允许名单里的成员才能修改 ACL（你 ou_${ctx.senderId.slice(3, 11)}… 不在）`);
+    await replyAndTrack(ctx, `❌ 只有全局允许名单里的成员才能修改 ACL（你 ou_${ctx.senderId.slice(3, 11)}… 不在）`);
     return;
   }
 
@@ -298,13 +310,13 @@ async function cmdAcl(ctx: CmdContext): Promise<void> {
       delete chatAcl[ctx.chatId];
       saveChatAcl();
     }
-    await replyText(ctx.messageId, `✅ 已清空本会话的额外允许名单`);
+    await replyAndTrack(ctx, `✅ 已清空本会话的额外允许名单`);
     log(`[acl] ${ctx.chatId} cleared by ${ctx.senderId}`);
     return;
   }
   const m = raw.match(/^(add|rm|remove|del|delete)\s+(.+)$/i);
   if (!m) {
-    await replyText(ctx.messageId, `❌ 用法：\`/acl add @某人\` | \`/acl rm @某人\` | \`/acl clear\` | \`/acl list\``);
+    await replyAndTrack(ctx, `❌ 用法：\`/acl add @某人\` | \`/acl rm @某人\` | \`/acl clear\` | \`/acl list\``);
     return;
   }
   const action = m[1].toLowerCase();
@@ -322,8 +334,7 @@ async function cmdAcl(ctx: CmdContext): Promise<void> {
   }
 
   if (!targetId) {
-    await replyText(
-      ctx.messageId,
+    await replyAndTrack(ctx,
       `❌ 没识别出目标用户。请 @ 目标（例如 \`/acl add @张三\`）或给完整 open_id（\`/acl add ou_xxxx\`）`,
     );
     return;
@@ -332,23 +343,23 @@ async function cmdAcl(ctx: CmdContext): Promise<void> {
   const list = chatAcl[ctx.chatId] ?? [];
   if (action === "add") {
     if (list.includes(targetId)) {
-      await replyText(ctx.messageId, `ℹ️ \`${targetId}\` 已经在本会话的允许名单里`);
+      await replyAndTrack(ctx, `ℹ️ \`${targetId}\` 已经在本会话的允许名单里`);
       return;
     }
     chatAcl[ctx.chatId] = [...list, targetId];
     saveChatAcl();
-    await replyText(ctx.messageId, `✅ 已在本会话允许 \`${targetId}\`（可以用 bot，但不能改 ACL）`);
+    await replyAndTrack(ctx, `✅ 已在本会话允许 \`${targetId}\`（可以用 bot，但不能改 ACL）`);
     log(`[acl] ${ctx.chatId} + ${targetId} by ${ctx.senderId}`);
   } else {
     if (!list.includes(targetId)) {
-      await replyText(ctx.messageId, `ℹ️ \`${targetId}\` 不在本会话的额外名单里`);
+      await replyAndTrack(ctx, `ℹ️ \`${targetId}\` 不在本会话的额外名单里`);
       return;
     }
     const next = list.filter((id) => id !== targetId);
     if (next.length) chatAcl[ctx.chatId] = next;
     else delete chatAcl[ctx.chatId];
     saveChatAcl();
-    await replyText(ctx.messageId, `✅ 已在本会话移除 \`${targetId}\``);
+    await replyAndTrack(ctx, `✅ 已在本会话移除 \`${targetId}\``);
     log(`[acl] ${ctx.chatId} - ${targetId} by ${ctx.senderId}`);
   }
 }
@@ -365,8 +376,7 @@ async function cmdBots(ctx: CmdContext): Promise<void> {
     const items = list.length
       ? list.map((id) => `  · \`${id}\``).join("\n")
       : "  _(无 — 默认所有 bot 发的消息都被丢弃)_";
-    await replyText(
-      ctx.messageId,
+    await replyAndTrack(ctx,
       `**本会话的 bot 触发允许名单**\n\n${items}\n\n` +
       `用法（仅全局允许名单成员可改）：\n` +
       `\`/bots add cli_xxx\`   允许该 app_id 的机器人触发本会话\n` +
@@ -378,7 +388,7 @@ async function cmdBots(ctx: CmdContext): Promise<void> {
   }
 
   if (!isGlobalAdmin) {
-    await replyText(ctx.messageId, `❌ 只有全局允许名单（ALLOWED_OPEN_IDS）成员才能改 /bots 名单`);
+    await replyAndTrack(ctx, `❌ 只有全局允许名单（ALLOWED_OPEN_IDS）成员才能改 /bots 名单`);
     return;
   }
 
@@ -387,42 +397,42 @@ async function cmdBots(ctx: CmdContext): Promise<void> {
       delete chatBotAllowlist[ctx.chatId];
       saveChatBotAllowlist();
     }
-    await replyText(ctx.messageId, `✅ 已清空本会话的 bot 触发名单`);
+    await replyAndTrack(ctx, `✅ 已清空本会话的 bot 触发名单`);
     log(`[bots] ${ctx.chatId} cleared by ${ctx.senderId}`);
     return;
   }
 
   const m = raw.match(/^(add|rm|remove|del|delete)\s+(\S+)$/i);
   if (!m) {
-    await replyText(ctx.messageId, `❌ 用法：\`/bots add cli_xxx\` | \`/bots rm cli_xxx\` | \`/bots clear\` | \`/bots list\``);
+    await replyAndTrack(ctx, `❌ 用法：\`/bots add cli_xxx\` | \`/bots rm cli_xxx\` | \`/bots clear\` | \`/bots list\``);
     return;
   }
   const action = m[1].toLowerCase();
   const targetAppId = m[2].trim();
   if (!/^cli_[a-zA-Z0-9]+$/.test(targetAppId)) {
-    await replyText(ctx.messageId, `❌ app_id 形如 \`cli_xxxxxxxxxxxxxxxx\`（机器人在飞书开放平台的 App ID）`);
+    await replyAndTrack(ctx, `❌ app_id 形如 \`cli_xxxxxxxxxxxxxxxx\`（机器人在飞书开放平台的 App ID）`);
     return;
   }
 
   if (action === "add") {
     if (list.includes(targetAppId)) {
-      await replyText(ctx.messageId, `ℹ️ \`${targetAppId}\` 已经在本会话的 bot 名单里`);
+      await replyAndTrack(ctx, `ℹ️ \`${targetAppId}\` 已经在本会话的 bot 名单里`);
       return;
     }
     chatBotAllowlist[ctx.chatId] = [...list, targetAppId];
     saveChatBotAllowlist();
-    await replyText(ctx.messageId, `✅ 已允许 \`${targetAppId}\` 触发本会话（如果它发消息且经过 reply mode 过滤）`);
+    await replyAndTrack(ctx, `✅ 已允许 \`${targetAppId}\` 触发本会话（如果它发消息且经过 reply mode 过滤）`);
     log(`[bots] ${ctx.chatId} + ${targetAppId} by ${ctx.senderId}`);
   } else {
     if (!list.includes(targetAppId)) {
-      await replyText(ctx.messageId, `ℹ️ \`${targetAppId}\` 不在本会话的 bot 名单里`);
+      await replyAndTrack(ctx, `ℹ️ \`${targetAppId}\` 不在本会话的 bot 名单里`);
       return;
     }
     const next = list.filter((id) => id !== targetAppId);
     if (next.length) chatBotAllowlist[ctx.chatId] = next;
     else delete chatBotAllowlist[ctx.chatId];
     saveChatBotAllowlist();
-    await replyText(ctx.messageId, `✅ 已移除 \`${targetAppId}\``);
+    await replyAndTrack(ctx, `✅ 已移除 \`${targetAppId}\``);
     log(`[bots] ${ctx.chatId} - ${targetAppId} by ${ctx.senderId}`);
   }
 }
@@ -435,7 +445,7 @@ async function cmdMode(ctx: CmdContext): Promise<void> {
     const line = override
       ? `当前会话回复模式：\`${cur}\`（本会话覆盖）`
       : `当前会话回复模式：\`${cur}\`（跟随全局默认）`;
-    await replyText(ctx.messageId,
+    await replyAndTrack(ctx,
       `${line}\n\n用法：\`/mode strict|owner|all\`\n- strict：所有人都必须 @bot 或 @owner\n- owner：群成员要 @；owner 自己不用 @\n- all：所有消息都回\n- \`/mode reset\` 恢复使用全局默认 \`${DEFAULT_REPLY_MODE}\``);
     return;
   }
@@ -444,22 +454,22 @@ async function cmdMode(ctx: CmdContext): Promise<void> {
       delete chatModes[ctx.chatId];
       saveChatModes();
     }
-    await replyText(ctx.messageId, `✅ 本会话已恢复使用全局默认：\`${DEFAULT_REPLY_MODE}\``);
+    await replyAndTrack(ctx, `✅ 本会话已恢复使用全局默认：\`${DEFAULT_REPLY_MODE}\``);
     log(`[mode] ${ctx.chatId} reset → ${DEFAULT_REPLY_MODE}`);
     return;
   }
   if (arg !== "strict" && arg !== "owner" && arg !== "all") {
-    await replyText(ctx.messageId, `❌ 无效模式：\`${arg}\`。支持 strict / owner / all / reset`);
+    await replyAndTrack(ctx, `❌ 无效模式：\`${arg}\`。支持 strict / owner / all / reset`);
     return;
   }
   chatModes[ctx.chatId] = arg as ReplyMode;
   saveChatModes();
-  await replyText(ctx.messageId, `✅ 本会话回复模式已设为：\`${arg}\``);
+  await replyAndTrack(ctx, `✅ 本会话回复模式已设为：\`${arg}\``);
   log(`[mode] ${ctx.chatId} → ${arg}`);
 }
 
 async function cmdRestart(ctx: CmdContext): Promise<void> {
-  await replyText(ctx.messageId, "♻️ restarting...");
+  await replyAndTrack(ctx, "♻️ restarting...");
   log(`[restart] requested by ${ctx.chatId}`);
   setImmediate(() => {
     _shutdown?.({
@@ -572,7 +582,7 @@ async function cmdNew(ctx: CmdContext): Promise<void> {
   }
 
   if (!existsSync(target) || !statSync(target).isDirectory()) {
-    await replyText(ctx.messageId, `❌ 不是目录: ${target}`);
+    await replyAndTrack(ctx, `❌ 不是目录: ${target}`);
     return;
   }
 
@@ -603,7 +613,7 @@ async function cmdNew(ctx: CmdContext): Promise<void> {
   }
   lines.push(`agent=${curAgent} 的 session 已清除，下条消息开新 session`);
   lines.push(`（其它 agent 的 session 不受影响）`);
-  await replyText(ctx.messageId, lines.join("\n"));
+  await replyAndTrack(ctx, lines.join("\n"));
   log(`[new] ${ctx.chatId} target=${target} source=${source} agent=${curAgent}`);
 }
 
@@ -611,12 +621,12 @@ async function cmdCancel(ctx: CmdContext): Promise<void> {
   const ctrl = promptAborts.get(ctx.chatId);
   if (!ctrl) {
     log(`[cancel] ${ctx.chatId} by ${ctx.senderId} (nothing in-flight)`);
-    await replyText(ctx.messageId, "(nothing to cancel — no in-flight query)");
+    await replyAndTrack(ctx, "(nothing to cancel — no in-flight query)");
     return;
   }
   log(`[cancel] ${ctx.chatId} by ${ctx.senderId} → aborting in-flight query`);
   ctrl.abort("cancel");
-  await replyText(ctx.messageId, "❌ cancelling…");
+  await replyAndTrack(ctx, "❌ cancelling…");
 }
 
 function runGit(projDir: string, args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
@@ -638,7 +648,7 @@ async function cmdUpdate(ctx: CmdContext): Promise<void> {
   const srcDir = dirname(fileURLToPath(import.meta.url));
   const projDir = dirname(srcDir);
   if (!existsSync(join(projDir, ".git"))) {
-    await replyText(ctx.messageId, `❌ not a git repo: ${projDir}`);
+    await replyAndTrack(ctx, `❌ not a git repo: ${projDir}`);
     return;
   }
 
@@ -647,16 +657,16 @@ async function cmdUpdate(ctx: CmdContext): Promise<void> {
   const br = await runGit(projDir, ["rev-parse", "--abbrev-ref", "HEAD"]);
   const branch = br.stdout.trim();
   if (!branch || branch === "HEAD") {
-    await replyText(ctx.messageId, `❌ detached HEAD or unknown branch — checkout a branch first`);
+    await replyAndTrack(ctx, `❌ detached HEAD or unknown branch — checkout a branch first`);
     log(`[update] ${ctx.chatId} no branch (HEAD detached)`);
     return;
   }
 
-  await replyText(ctx.messageId, `⬇️ fetching origin/${branch} (${projDir})…`);
+  await replyAndTrack(ctx, `⬇️ fetching origin/${branch} (${projDir})…`);
 
   const fetched = await runGit(projDir, ["fetch", "origin", branch]);
   if (fetched.code !== 0) {
-    await replyText(ctx.messageId, `❌ fetch origin/${branch} failed (exit ${fetched.code})\n${(fetched.stderr || fetched.stdout).slice(0, 600)}`);
+    await replyAndTrack(ctx, `❌ fetch origin/${branch} failed (exit ${fetched.code})\n${(fetched.stderr || fetched.stdout).slice(0, 600)}`);
     log(`[update] ${ctx.chatId} fetch rc=${fetched.code} branch=${branch}`);
     return;
   }
@@ -664,14 +674,14 @@ async function cmdUpdate(ctx: CmdContext): Promise<void> {
   const merged = await runGit(projDir, ["merge", "--ff-only", `origin/${branch}`]);
   const combined = [merged.stdout, merged.stderr].map((s) => s.trim()).filter(Boolean).join("\n");
   if (merged.code !== 0) {
-    await replyText(ctx.messageId, `❌ merge --ff-only origin/${branch} failed (exit ${merged.code})\n${combined.slice(0, 600)}`);
+    await replyAndTrack(ctx, `❌ merge --ff-only origin/${branch} failed (exit ${merged.code})\n${combined.slice(0, 600)}`);
     log(`[update] ${ctx.chatId} merge rc=${merged.code} branch=${branch}`);
     return;
   }
 
   const upToDate = /already up to date/i.test(combined) || combined === "";
   if (upToDate) {
-    await replyText(ctx.messageId, `ℹ️ already up to date (on ${branch})`);
+    await replyAndTrack(ctx, `ℹ️ already up to date (on ${branch})`);
     log(`[update] ${ctx.chatId} up-to-date branch=${branch}`);
     return;
   }
@@ -679,8 +689,7 @@ async function cmdUpdate(ctx: CmdContext): Promise<void> {
   const depsChanged = /package(-lock)?\.json/.test(combined);
   const depsHint = depsChanged ? "\n⚠️ package*.json changed — may need npm install" : "";
 
-  await replyText(
-    ctx.messageId,
+  await replyAndTrack(ctx,
     `✅ updated, restarting… (branch ${branch})\n${combined.slice(0, 400)}${depsHint}`,
   );
   log(`[update] ${ctx.chatId} updated branch=${branch}, restarting (depsChanged=${depsChanged})`);
@@ -735,12 +744,11 @@ async function cmdResume(ctx: CmdContext): Promise<void> {
       const msg = e?.message ?? String(e);
       // Not a capability → tell the user why; otherwise surface the error.
       if (/does not advertise listSessions/i.test(msg)) {
-        await replyText(
-          ctx.messageId,
+        await replyAndTrack(ctx,
           `❌ /resume 不支持当前 agent (\`${curAgent}\`) — 它没有声明 \`session/list\` 能力。\n切换：\`/agent claude\``,
         );
       } else {
-        await replyText(ctx.messageId, `❌ listSessions 失败: ${msg}`);
+        await replyAndTrack(ctx, `❌ listSessions 失败: ${msg}`);
       }
       return;
     }
@@ -750,7 +758,7 @@ async function cmdResume(ctx: CmdContext): Promise<void> {
     const where = source === "claude-jsonl"
       ? ctx.chatWorkdir
       : `agent=${curAgent} cwd=${ctx.chatWorkdir}`;
-    await replyText(ctx.messageId, `(no sessions in ${where})`);
+    await replyAndTrack(ctx, `(no sessions in ${where})`);
     return;
   }
 
@@ -786,12 +794,12 @@ async function cmdResume(ctx: CmdContext): Promise<void> {
     const matches = entries.filter((s) => s.sid.startsWith(target));
     if (matches.length === 1) chosen = matches[0];
     else if (matches.length > 1) {
-      await replyText(ctx.messageId, `❌ ambiguous prefix "${target}" matches ${matches.length} sessions`);
+      await replyAndTrack(ctx, `❌ ambiguous prefix "${target}" matches ${matches.length} sessions`);
       return;
     }
   }
   if (!chosen) {
-    await replyText(ctx.messageId, `❌ no session matching "${target}"\nuse \`/resume\` to list`);
+    await replyAndTrack(ctx, `❌ no session matching "${target}"\nuse \`/resume\` to list`);
     return;
   }
   // Bind: write persisted file + forget any current in-memory mapping so the
@@ -800,8 +808,7 @@ async function cmdResume(ctx: CmdContext): Promise<void> {
   const inst = agentPool.find(backend, ctx.chatId, ctx.chatWorkdir);
   if (inst) inst.forgetSession(ctx.chatId);
   const previewShort = chosen.preview.length > 100 ? chosen.preview.slice(0, 100) + "…" : chosen.preview;
-  await replyText(
-    ctx.messageId,
+  await replyAndTrack(ctx,
     `✅ bound ${curAgent} session\n${chosen.sid}\nworkdir: ${ctx.chatWorkdir}\n${source === "claude-jsonl" ? "first prompt" : "title"}: ${previewShort}`,
   );
   log(`[resume] ${ctx.chatId} agent=${curAgent} sid=${chosen.sid} OK`);
@@ -815,7 +822,7 @@ async function cmdBind(ctx: CmdContext): Promise<void> {
   const backend = getBackend(curAgent) ?? getDefaultBackend();
   const target = ctx.match[1];
   if (!target) {
-    await replyText(ctx.messageId, `usage: /bind <session-id>\n(current agent: ${curAgent}, workdir: ${ctx.chatWorkdir})`);
+    await replyAndTrack(ctx, `usage: /bind <session-id>\n(current agent: ${curAgent}, workdir: ${ctx.chatWorkdir})`);
     log(`[bind] ${ctx.chatId} missing arg`);
     return;
   }
@@ -836,12 +843,11 @@ async function cmdBind(ctx: CmdContext): Promise<void> {
     } catch (e: any) {
       const msg = e?.message ?? String(e);
       if (/does not advertise listSessions/i.test(msg)) {
-        await replyText(
-          ctx.messageId,
+        await replyAndTrack(ctx,
           `❌ /bind 不支持当前 agent (\`${curAgent}\`) — 它没有声明 \`session/list\` 能力。\n切换：\`/agent claude\``,
         );
       } else {
-        await replyText(ctx.messageId, `❌ listSessions 失败: ${msg}`);
+        await replyAndTrack(ctx, `❌ listSessions 失败: ${msg}`);
       }
       return;
     }
@@ -857,7 +863,7 @@ async function cmdBind(ctx: CmdContext): Promise<void> {
     const where = source === "claude-jsonl"
       ? "~/.claude/projects/"
       : `agent ${curAgent}'s session store`;
-    await replyText(ctx.messageId, `❌ no session found matching "${target}"\n(searched ${where})`);
+    await replyAndTrack(ctx, `❌ no session found matching "${target}"\n(searched ${where})`);
     log(`[bind] ${ctx.chatId} agent=${curAgent} sid=${target} NOT_FOUND`);
     return;
   }
@@ -867,8 +873,7 @@ async function cmdBind(ctx: CmdContext): Promise<void> {
       .map((m) => `• \`${m.sid}\`  ${m.cwd ?? "(cwd unknown)"}`)
       .join("\n");
     const more = matches.length > 5 ? `\n…(+${matches.length - 5} more)` : "";
-    await replyText(
-      ctx.messageId,
+    await replyAndTrack(ctx,
       `❌ ambiguous "${target}" matches ${matches.length} sessions:\n${list}${more}\n\n_use a longer prefix or the full sid_`,
     );
     log(`[bind] ${ctx.chatId} agent=${curAgent} sid=${target} AMBIGUOUS count=${matches.length}`);
@@ -904,7 +909,7 @@ async function cmdBind(ctx: CmdContext): Promise<void> {
     chatWorkdirs[ctx.chatId] ?? ctx.chatWorkdir,
   );
   if (inst) inst.forgetSession(ctx.chatId);
-  await replyText(ctx.messageId, `✅ bound ${curAgent} session\n${m.sid}${workdirNote}`);
+  await replyAndTrack(ctx, `✅ bound ${curAgent} session\n${m.sid}${workdirNote}`);
   log(`[bind] ${ctx.chatId} agent=${curAgent} sid=${m.sid} OK (cwd=${m.cwd ?? "unknown"}, cwd_ok=${cwdOk})`);
 }
 
