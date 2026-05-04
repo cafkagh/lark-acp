@@ -53,8 +53,9 @@ export const TYPING_EMOJI = process.env.TYPING_EMOJI ?? "Typing";
 //
 // Note: Feishu only accepts a fixed set of emoji_type names — TrashCan etc.
 // don't exist; common working values include Done, OK, ThumbsDown, POOP.
-// Default `Done` is the most neutral / least judgmental.
-export const RECALL_EMOJI = process.env.RECALL_EMOJI ?? "Done";
+// `CrossMark` = ❌ — universally read as "delete / cancel", and Feishu's
+// reactions API accepts it. Other working candidates: Done, OK, ThumbsDown.
+export const RECALL_EMOJI = process.env.RECALL_EMOJI ?? "CrossMark";
 // Last N bot messages tracked per chat for recall lookup. Older entries
 // fall off the ring; recall by reaction on those just no-ops.
 export const CHAT_BOT_MSG_LIMIT = Number(process.env.CHAT_BOT_MSG_LIMIT ?? 20);
