@@ -1,6 +1,7 @@
 import { larkApi } from "./lark.js";
 import { log } from "./log.js";
 import { recordBotMsg } from "./state.js";
+import { RECALL_EMOJI } from "./config.js";
 
 // Per-chat cumulative cost (live, resets on restart). Used by /status footer.
 export const chatCostUsd = new Map<string, number>();
@@ -296,9 +297,10 @@ export class StreamingReplier {
 
   // Small hint shown on the FINAL render (after close) so users discover
   // the reaction-based recall path. Quiet italic so it doesn't compete
-  // with the substantive footer.
+  // with the substantive footer. The exact emoji name is read from config
+  // so swapping RECALL_EMOJI updates the displayed hint too.
   private recallHint(): string {
-    return "_🗑️ 反应可撤回_";
+    return `_反应 "${RECALL_EMOJI}" 可撤回_`;
   }
 
   private render(): string {

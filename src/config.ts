@@ -50,7 +50,11 @@ export const TYPING_EMOJI = process.env.TYPING_EMOJI ?? "Typing";
 // triggered the bot reply (or any global ACL member) can react with this
 // emoji on the bot card / text reply to delete it. See state.ts:chatBotMsgs
 // for the per-chat ring buffer of recallable messages.
-export const RECALL_EMOJI = process.env.RECALL_EMOJI ?? "TrashCan";
+//
+// Note: Feishu only accepts a fixed set of emoji_type names — TrashCan etc.
+// don't exist; common working values include Done, OK, ThumbsDown, POOP.
+// Default `Done` is the most neutral / least judgmental.
+export const RECALL_EMOJI = process.env.RECALL_EMOJI ?? "Done";
 // Last N bot messages tracked per chat for recall lookup. Older entries
 // fall off the ring; recall by reaction on those just no-ops.
 export const CHAT_BOT_MSG_LIMIT = Number(process.env.CHAT_BOT_MSG_LIMIT ?? 20);
