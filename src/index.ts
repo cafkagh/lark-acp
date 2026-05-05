@@ -271,10 +271,14 @@ async function handleReactionEvent(raw: any): Promise<void> {
     return;
   }
   const { chatId, entry } = found;
-  const isAdmin = ALLOWED_OPEN_IDS.has(operatorId);
-  const isTrigger = entry.triggerOpenId && operatorId === entry.triggerOpenId;
-  if (!isAdmin && !isTrigger) {
-    log(`[recall] ${chatId} denied: operator=${operatorId} is not trigger=${entry.triggerOpenId}`);
+  // Recall permission is tighter than general ACL: only the user whose
+  // prompt produced this bot reply (triggerer), or the configured OWNER,
+  // can delete it. Other allowlist members can use the bot but can't
+  // retract messages that aren't theirs.
+  const isOwner = !!OWNER_OPEN_ID && operatorId === OWNER_OPEN_ID;
+  const isTrigger = !!entry.triggerOpenId && operatorId === entry.triggerOpenId;
+  if (!isOwner && !isTrigger) {
+    log(`[recall] ${chatId} denied: operator=${operatorId} is not trigger=${entry.triggerOpenId} nor owner=${OWNER_OPEN_ID}`);
     return;
   }
   const ageMs = Date.now() - entry.sentAt;
