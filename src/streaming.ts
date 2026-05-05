@@ -3,6 +3,21 @@ import { log } from "./log.js";
 import { recordBotMsg } from "./state.js";
 import { RECALL_EMOJI } from "./config.js";
 
+// emoji_type name → human-visible glyph. Feishu's reactions API takes
+// internal codes like "CrossMark" / "Done" / "ThumbsDown"; the user
+// sees ❌ / ✓ / 👎. Display the glyph in the recall hint so the
+// instruction is self-evident.
+const RECALL_EMOJI_GLYPH: Record<string, string> = {
+  CrossMark: "❌",
+  Done: "✓",
+  ThumbsDown: "👎",
+  ThumbsUp: "👍",
+  OK: "👌",
+  POOP: "💩",
+  Heart: "❤️",
+  THANKS: "🙏",
+};
+
 // Per-chat cumulative cost (live, resets on restart). Used by /status footer.
 export const chatCostUsd = new Map<string, number>();
 
@@ -297,10 +312,12 @@ export class StreamingReplier {
 
   // Small hint shown on the FINAL render (after close) so users discover
   // the reaction-based recall path. Quiet italic so it doesn't compete
-  // with the substantive footer. The exact emoji name is read from config
-  // so swapping RECALL_EMOJI updates the displayed hint too.
+  // with the substantive footer. Map common emoji_type names to their
+  // visible unicode glyph; fall back to the bare name for less-common
+  // configurations.
   private recallHint(): string {
-    return `_反应 "${RECALL_EMOJI}" 可撤回_`;
+    const display = RECALL_EMOJI_GLYPH[RECALL_EMOJI] ?? RECALL_EMOJI;
+    return `_${display} 可撤回_`;
   }
 
   private render(): string {
