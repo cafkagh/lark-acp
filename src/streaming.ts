@@ -332,18 +332,35 @@ export class StreamingReplier {
 
     const parts: string[] = [];
 
-    if (this.toolEntries.length) {
+    // Tool history visibility:
+    //  - Running:  multi-line block with the long input preview (and any
+    //    partial result) on indented lines beneath the status line, so
+    //    users can audit what's executing right now in detail.
+    //  - Done:     single tight line with short input + result + duration.
+    //  - After close (this.closed): hide the entire tool history — the
+    //    final answer below speaks for itself, no need for the audit
+    //    trail to crowd the card after the task is complete.
+    if (this.toolEntries.length && !this.closed) {
       const now = Date.now();
       const lines = this.toolEntries.slice(-this.TOOL_HISTORY_MAX).map((e) => {
         const running = e.status === "in_progress" || (!e.status && !e.endMs);
         const failed = e.status === "failed";
         const tick = failed ? "✗" : running ? "▶" : "✓";
-        const shown = running ? (e.longPreview ?? e.preview) : e.preview;
-        const arg = shown ? ` \`${shown}\`` : "";
-        const res = e.result ? ` → ${e.result}` : "";
         const dur = e.endMs
           ? ` _(${((e.endMs - e.startMs) / 1000).toFixed(1)}s)_`
           : ` _(${Math.round((now - e.startMs) / 1000)}s, running…)_`;
+        if (running) {
+          // Verbose multi-line: status + indented detail.
+          // Use full-width space (U+3000) for the indent — markdown won't
+          // turn it into a code block, and Feishu renders it as a clear
+          // visual indent.
+          const detail = e.longPreview ?? e.preview ?? "";
+          const detailLine = detail ? `\n　\`${detail}\`` : "";
+          const partialRes = e.result ? `\n　→ ${e.result}` : "";
+          return `${tick} 🔧 **${e.name}**${dur}${detailLine}${partialRes}`;
+        }
+        const arg = e.preview ? ` \`${e.preview}\`` : "";
+        const res = e.result ? ` → ${e.result}` : "";
         return `${tick} 🔧 **${e.name}**${arg}${res}${dur}`;
       });
       parts.push(lines.join("\n"));
