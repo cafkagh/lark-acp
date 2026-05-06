@@ -67,6 +67,28 @@ export async function updateCard(messageId: string, markdown: string, opts?: Car
   });
 }
 
+// ACP kind → short display name. Codex-acp tends to put a verbose
+// command into ToolCall.title (e.g. "printf '...'; sleep 5; ..."), which
+// blows up the done-state line. The 'kind' field is the high-level
+// category (execute / read / edit / search / ...) — we use that for the
+// minimal done-state name and fall back to a truncated title.
+const KIND_LABEL: Record<string, string> = {
+  execute: "Shell",
+  read: "Read",
+  edit: "Edit",
+  delete: "Delete",
+  move: "Move",
+  search: "Search",
+  fetch: "Fetch",
+  think: "Think",
+  switch_mode: "Mode",
+};
+function shortToolName(name: string, kind?: string): string {
+  if (kind && KIND_LABEL[kind]) return KIND_LABEL[kind];
+  if (name.length <= 24) return name;
+  return name.slice(0, 24).trimEnd() + "…";
+}
+
 export class StreamingReplier {
   private bodyText = "";
   private toolEntries: Array<{
@@ -74,6 +96,7 @@ export class StreamingReplier {
     name: string;
     preview?: string;
     longPreview?: string;
+    kind?: string;        // ACP ToolKind (execute/read/edit/...) — used for short done-state label
     startMs: number;
     endMs?: number;
     status?: "in_progress" | "completed" | "failed";
@@ -138,10 +161,10 @@ export class StreamingReplier {
     this.scheduleFlush();
   }
 
-  onToolStart(id: string, name: string, preview?: string, longPreview?: string) {
+  onToolStart(id: string, name: string, preview?: string, longPreview?: string, kind?: string) {
     if (this.closed) return;
     this.toolEntries.push({
-      id, name, preview, longPreview,
+      id, name, preview, longPreview, kind,
       startMs: Date.now(),
       status: "in_progress",
     });
@@ -158,6 +181,7 @@ export class StreamingReplier {
     title?: string;
     preview?: string;
     longPreview?: string;
+    kind?: string;
     result?: string;
   }) {
     if (this.closed) return;
@@ -166,6 +190,7 @@ export class StreamingReplier {
     if (opts.title) e.name = opts.title;
     if (opts.preview !== undefined) e.preview = opts.preview;
     if (opts.longPreview !== undefined) e.longPreview = opts.longPreview;
+    if (opts.kind !== undefined) e.kind = opts.kind;
     if (opts.result !== undefined) e.result = opts.result;
     if (opts.status) {
       e.status = opts.status;
@@ -354,7 +379,8 @@ export class StreamingReplier {
           const res = e.result ? ` → ${e.result}` : "";
           return `${tick} 🔧 **${e.name}**${arg}${res}${dur}`;
         }
-        return `${tick} 🔧 **${e.name}**${dur}`;
+        // Done: short label only — kind > truncated title. No input echo.
+        return `${tick} 🔧 **${shortToolName(e.name, e.kind)}**${dur}`;
       });
       parts.push(lines.join("\n"));
     }

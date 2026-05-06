@@ -160,7 +160,8 @@ export async function askAgent(opts: {
           const title = String(u.title || "tool");
           const short = pickPreview(u.rawInput, 60);
           const long = pickPreview(u.rawInput, 250);
-          replier.onToolStart(id, title, short, long);
+          const kind = typeof u.kind === "string" ? u.kind : undefined;
+          replier.onToolStart(id, title, short, long, kind);
           // tool_call may already include initial content (e.g. echo of input).
           if (u.content) {
             const txt = extractContentText(u.content);
@@ -172,6 +173,7 @@ export async function askAgent(opts: {
           const id = String(u.toolCallId);
           const update: Parameters<StreamingReplier["onToolUpdate"]>[1] = {};
           if (typeof u.title === "string") update.title = u.title;
+          if (typeof u.kind === "string") update.kind = u.kind;
           if (u.status) update.status = u.status;
           if (u.rawInput) {
             update.preview = pickPreview(u.rawInput, 60);
