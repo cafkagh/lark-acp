@@ -332,24 +332,29 @@ export class StreamingReplier {
 
     const parts: string[] = [];
 
-    // Tool history rendering matches lark-bot-ts: one line per tool,
-    // running state shows the longer input preview, done state collapses
-    // to the short preview. After the task completes (this.closed), the
-    // entire tool history is hidden — the final answer + footer stand
-    // alone, no audit trail crowding the card.
+    // Tool history:
+    //  - Running: full single-line audit — name + long input preview +
+    //    result (if a partial came through) + elapsed.
+    //  - Done:    minimal — name + duration only. No input echo, no
+    //    result blob. The agent's final answer (below) is the source
+    //    of truth; the line just confirms "this tool ran in Xs".
+    //  - After the task closes (this.closed), the whole list is hidden.
     if (this.toolEntries.length && !this.closed) {
       const now = Date.now();
       const lines = this.toolEntries.slice(-this.TOOL_HISTORY_MAX).map((e) => {
         const running = e.status === "in_progress" || (!e.status && !e.endMs);
         const failed = e.status === "failed";
         const tick = failed ? "✗" : running ? "▶" : "✓";
-        const shown = running ? (e.longPreview ?? e.preview) : e.preview;
-        const arg = shown ? ` \`${shown}\`` : "";
-        const res = e.result ? ` → ${e.result}` : "";
         const dur = e.endMs
           ? ` _(${((e.endMs - e.startMs) / 1000).toFixed(1)}s)_`
           : ` _(${Math.round((now - e.startMs) / 1000)}s, running…)_`;
-        return `${tick} 🔧 **${e.name}**${arg}${res}${dur}`;
+        if (running) {
+          const shown = e.longPreview ?? e.preview;
+          const arg = shown ? ` \`${shown}\`` : "";
+          const res = e.result ? ` → ${e.result}` : "";
+          return `${tick} 🔧 **${e.name}**${arg}${res}${dur}`;
+        }
+        return `${tick} 🔧 **${e.name}**${dur}`;
       });
       parts.push(lines.join("\n"));
     }
