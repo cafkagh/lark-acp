@@ -144,7 +144,10 @@ export async function askAgent(opts: {
         case "agent_message_chunk": {
           const c = u.content;
           if (c?.type === "text" && typeof c.text === "string") {
-            replier.feed(c.text);
+            // Pass messageId so the replier can insert paragraph breaks
+            // between distinct agent messages within a single turn.
+            const msgId = typeof u.messageId === "string" ? u.messageId : undefined;
+            replier.feed(c.text, msgId);
           }
           break;
         }

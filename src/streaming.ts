@@ -142,9 +142,25 @@ export class StreamingReplier {
     if (!this.closed) this.scheduleFlush();
   }
 
-  feed(text: string) {
+  // Track logical message boundaries. ACP's agent_message_chunk carries
+  // an optional messageId — chunks of the same message share it; a change
+  // signals a new message. Some backends don't populate messageId, so we
+  // also treat tool calls as paragraph separators (text → tool → text is
+  // two logical thoughts visually).
+  private lastMessageId: string | undefined;
+  private toolsSinceLastText = false;
+
+  feed(text: string, messageId?: string) {
     if (this.closed || !text) return;
+    const isNewMessage = !!(messageId && this.lastMessageId && messageId !== this.lastMessageId);
+    if (this.bodyText && (isNewMessage || this.toolsSinceLastText)) {
+      // Paragraph break between distinct agent messages so a "好的，我来执行"
+      // intro and the post-tool "已完成…" summary don't collide on one line.
+      this.bodyText += "\n\n";
+    }
     this.bodyText += text;
+    if (messageId) this.lastMessageId = messageId;
+    this.toolsSinceLastText = false;
     // Once we have body text, the agent isn't actively "thinking" — it's
     // committed to a response. Drop the indicator.
     if (this.thinking) this.thinking = false;
@@ -171,6 +187,9 @@ export class StreamingReplier {
     if (this.toolEntries.length > this.TOOL_HISTORY_MAX) {
       this.toolEntries.shift();
     }
+    // Mark that tools have run since the last text emission — used by
+    // feed() to insert a paragraph break before the next message chunk.
+    this.toolsSinceLastText = true;
     // A new tool call also implies thinking has finished.
     if (this.thinking) this.thinking = false;
     this.scheduleFlush();
