@@ -351,23 +351,26 @@ async function handleEvent(line: string) {
   const mentionedBot = BOT_OPEN_ID ? mentionedIds.includes(BOT_OPEN_ID) : false;
   const mentionedOwner = OWNER_OPEN_ID ? mentionedIds.includes(OWNER_OPEN_ID) : false;
 
+  const isP2P = chatType === "p2p";
   const chatMode = modeForChat(chatId);
+
+  // Universal directed-mention guard: applies in EVERY mode (including
+  // 'all'). If the message @s another human (not the bot, not the owner)
+  // and does NOT also @ the bot, the speaker is talking to that person —
+  // this bot has no business butting in even when mode=all. P2P chats
+  // can't have other-human mentions structurally; guarded for safety.
+  const mentionedOther = mentionedIds.some(
+    (id) => id !== BOT_OPEN_ID && id !== OWNER_OPEN_ID,
+  );
+  if (!isP2P && mentionedOther && !mentionedBot) {
+    log(`skip [${chatId}] @'d someone else, not the bot (mode=${chatMode})`);
+    return;
+  }
+
   if (chatMode !== "all") {
-    const isP2P = chatType === "p2p";
     // App senders can never trigger owner-mode bypass — owner is a person.
     const senderIsOwner = senderKind === "user" && !!OWNER_OPEN_ID && senderId === OWNER_OPEN_ID;
-
-    let ownerBypass = chatMode === "owner" && senderIsOwner;
-    if (ownerBypass && mentionedIds.length > 0 && !mentionedBot) {
-      const mentionedSomeoneElse = mentionedIds.some(
-        (id) => id !== BOT_OPEN_ID && id !== OWNER_OPEN_ID,
-      );
-      if (mentionedSomeoneElse) {
-        ownerBypass = false;
-        log(`skip [${chatId}] owner @'d someone else, not the bot`);
-        return;
-      }
-    }
+    const ownerBypass = chatMode === "owner" && senderIsOwner;
 
     if (!isP2P && !ownerBypass && !mentionedBot && !mentionedOwner) {
       log(`skip [${chatId}] (${chatType}, mode=${chatMode}, no @bot/@owner)`);
