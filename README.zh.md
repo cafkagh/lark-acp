@@ -32,8 +32,9 @@ git clone git@github.com:cafkagh/lark-acp.git
 cd lark-acp
 npm install
 
-cp .env.example .env
-# 编辑 .env，至少填：
+mkdir -p ~/.lark-acp
+cp .env.example ~/.lark-acp/.env
+# 编辑 ~/.lark-acp/.env，至少填：
 #   ALLOWED_OPEN_IDS, OWNER_OPEN_ID, BOT_OPEN_ID, BOT_APP_ID
 
 ./bin/lark-acp
@@ -48,7 +49,7 @@ cp .env.example .env
 ```bash
 codex   # 一次性登录 ChatGPT 账号
 # 或者：
-echo "OPENAI_API_KEY=sk-..." >> .env
+echo "OPENAI_API_KEY=sk-..." >> ~/.lark-acp/.env
 ```
 
 ### Claude Code
@@ -64,8 +65,8 @@ echo "OPENAI_API_KEY=sk-..." >> .env
 }
 ```
 
-如果在 root 用户下跑，需在 `.env` 加 `IS_SANDBOX=1`（claude SDK 默认拒绝 root bypass permission）。
-如果 npm 没自动装上对应平台的 claude binary，在 `.env` 加 `CLAUDE_CODE_EXECUTABLE=/path/to/claude`。
+如果在 root 用户下跑，需在 `~/.lark-acp/.env` 加 `IS_SANDBOX=1`（claude SDK 默认拒绝 root bypass permission）。
+如果 npm 没自动装上对应平台的 claude binary，在 `~/.lark-acp/.env` 加 `CLAUDE_CODE_EXECUTABLE=/path/to/claude`。
 
 ## 命令面
 
@@ -163,7 +164,7 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/opt/lark-acp
-EnvironmentFile=/opt/lark-acp/.env
+EnvironmentFile=/root/.lark-acp/.env
 # nvm-installed node 不在 systemd 默认 PATH 里，按你机器的实际路径填
 Environment=PATH=/root/.nvm/versions/node/v22.22.2/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/opt/lark-acp/bin/lark-acp

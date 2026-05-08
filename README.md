@@ -32,8 +32,9 @@ git clone git@github.com:cafkagh/lark-acp.git
 cd lark-acp
 npm install
 
-cp .env.example .env
-# Edit .env, at minimum:
+mkdir -p ~/.lark-acp
+cp .env.example ~/.lark-acp/.env
+# Edit ~/.lark-acp/.env, at minimum:
 #   ALLOWED_OPEN_IDS, OWNER_OPEN_ID, BOT_OPEN_ID, BOT_APP_ID
 
 ./bin/lark-acp
@@ -48,7 +49,7 @@ Requires `lark-cli` installed and logged in with bot credentials — event subsc
 ```bash
 codex   # one-time ChatGPT login
 # or:
-echo "OPENAI_API_KEY=sk-..." >> .env
+echo "OPENAI_API_KEY=sk-..." >> ~/.lark-acp/.env
 ```
 
 ### Claude Code
@@ -64,8 +65,8 @@ echo "OPENAI_API_KEY=sk-..." >> .env
 }
 ```
 
-If running as root, add `IS_SANDBOX=1` to `.env` (Claude SDK refuses bypass-permissions under root without it).
-If npm didn't install the right Claude binary for your platform, also add `CLAUDE_CODE_EXECUTABLE=/path/to/claude`.
+If running as root, add `IS_SANDBOX=1` to `~/.lark-acp/.env` (Claude SDK refuses bypass-permissions under root without it).
+If npm didn't install the right Claude binary for your platform, also add `CLAUDE_CODE_EXECUTABLE=/path/to/claude` to `~/.lark-acp/.env`.
 
 ## Commands
 
@@ -163,7 +164,7 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/opt/lark-acp
-EnvironmentFile=/opt/lark-acp/.env
+EnvironmentFile=/root/.lark-acp/.env
 # nvm-installed node isn't on systemd's default PATH; fill in your real path
 Environment=PATH=/root/.nvm/versions/node/v22.22.2/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/opt/lark-acp/bin/lark-acp
