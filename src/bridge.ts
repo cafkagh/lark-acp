@@ -2,7 +2,7 @@ import type {
   SessionNotification, ContentBlock, RequestPermissionRequest,
 } from "@agentclientprotocol/sdk";
 import { log } from "./log.js";
-import { agentPool, promptAborts, clearPersistedSessionId } from "./agents/client.js";
+import { agentPool, promptAborts } from "./agents/client.js";
 import { getBackend, getDefaultBackend } from "./agents/registry.js";
 import type { AgentBackend } from "./agents/types.js";
 import { agentForChat, modelPrefForChat } from "./state.js";
@@ -229,11 +229,19 @@ export async function askAgent(opts: {
   try {
     resp = await instance.prompt(chatId, sessionId, blocks, cbs, abort.signal);
   } catch (e: any) {
-    // Subprocess died mid-prompt or connection broke. Drop the cached
-    // session id since the agent likely lost state.
-    log(`[bridge/${backend.name}] prompt threw: ${e?.message ?? e} — clearing session`);
-    instance.forgetSession(chatId);
-    clearPersistedSessionId(chatId, backend.name);
+    // Don't drop the persisted session id here, regardless of failure cause:
+    //   - Single-turn refusal (CyberPolicy, model Internal error, etc.):
+    //     subprocess + ACP session are both fine. Clearing would needlessly
+    //     orphan the conversation.
+    //   - Subprocess crash: ACP sessions live in the agent's own on-disk
+    //     storage (codex ~/.codex/sessions, claude ~/.claude/projects), not
+    //     in the subprocess. The next turn spawns a fresh process and
+    //     ensureSession() will loadSession back from disk. If that load
+    //     itself fails, ensureSession already clears the stale binding and
+    //     falls back to newSession — so we don't need to second-guess it
+    //     from out here.
+    log(`[bridge/${backend.name}] prompt threw: ${e?.message ?? e} — session binding preserved`);
+    instance.forgetSession(chatId); // drop in-memory map only; persisted id stays
     throw e;
   }
 
