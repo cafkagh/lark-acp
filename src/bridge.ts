@@ -229,19 +229,17 @@ export async function askAgent(opts: {
   try {
     resp = await instance.prompt(chatId, sessionId, blocks, cbs, abort.signal);
   } catch (e: any) {
-    // Don't drop the persisted session id here, regardless of failure cause:
-    //   - Single-turn refusal (CyberPolicy, model Internal error, etc.):
-    //     subprocess + ACP session are both fine. Clearing would needlessly
-    //     orphan the conversation.
-    //   - Subprocess crash: ACP sessions live in the agent's own on-disk
-    //     storage (codex ~/.codex/sessions, claude ~/.claude/projects), not
-    //     in the subprocess. The next turn spawns a fresh process and
-    //     ensureSession() will loadSession back from disk. If that load
-    //     itself fails, ensureSession already clears the stale binding and
-    //     falls back to newSession — so we don't need to second-guess it
-    //     from out here.
-    log(`[bridge/${backend.name}] prompt threw: ${e?.message ?? e} — session binding preserved`);
-    instance.forgetSession(chatId); // drop in-memory map only; persisted id stays
+    // codex-acp's thread becomes unrecoverable after an "Unhandled error
+    // during turn" (CyberPolicy, model errors, …) — even unrelated
+    // follow-up prompts on the same in-memory thread keep returning
+    // Internal error. Force a fresh subprocess: dispose drops the kid,
+    // pool.get() will respawn on the next prompt, and ensureSession will
+    // loadSession from the agent's on-disk jsonl (history replays). The
+    // persisted sid stays so the binding survives. ensureSession itself
+    // owns the "sid is truly stale" recovery (clears + newSession).
+    log(`[bridge/${backend.name}] prompt threw: ${e?.message ?? e} — disposing instance, session binding preserved`);
+    instance.forgetSession(chatId);
+    instance.dispose("prompt-error").catch(() => {});
     throw e;
   }
 
