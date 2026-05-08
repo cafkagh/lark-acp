@@ -262,6 +262,7 @@ class AgentInstance {
             sessionId: persisted,
             cwd: this.cwd,
             mcpServers: [],
+            ...(this.backend.sessionMeta && { _meta: this.backend.sessionMeta }),
           });
           this.sessionByChat.set(chatId, persisted);
           if (loaded.models) this.modelsByChat.set(chatId, loaded.models);
@@ -279,6 +280,7 @@ class AgentInstance {
             sessionId: persisted,
             cwd: this.cwd,
             mcpServers: [],
+            ...(this.backend.sessionMeta && { _meta: this.backend.sessionMeta }),
           });
           this.sessionByChat.set(chatId, persisted);
           if (resumed.models) this.modelsByChat.set(chatId, resumed.models);
@@ -298,6 +300,7 @@ class AgentInstance {
     const created = await this.connection.newSession({
       cwd: this.cwd,
       mcpServers: [],
+      ...(this.backend.sessionMeta && { _meta: this.backend.sessionMeta }),
     });
     this.sessionByChat.set(chatId, created.sessionId);
     writePersistedSessionId(chatId, this.backend.name, created.sessionId);

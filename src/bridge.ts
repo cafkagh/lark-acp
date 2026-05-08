@@ -8,37 +8,8 @@ import type { AgentBackend } from "./agents/types.js";
 import { agentForChat, modelPrefForChat } from "./state.js";
 import { StreamingReplier } from "./streaming.js";
 
-// Same idea as the original BOT_RELAY_SYSTEM_HINT — but injected per-prompt
-// because ACP doesn't expose a standard "system prompt" slot, and we don't
-// want to depend on backend-specific flags. Repeated each turn (tiny token
-// cost, robust across resume / load).
-export const BOT_RELAY_PREAMBLE = `
-You are running inside a Feishu/Lark chat bot. When a user prompt is
-prefixed with a "[Feishu ...]" tag it means the message arrived from a
-Feishu chat, and the bot will automatically relay your text response
-back to that same chat as the reply.
-
-Rules when handling a [Feishu ...] prompt:
-- Your text output IS the reply. Just answer directly.
-- Do NOT call any lark / lark-im / Feishu send-message tool to reply to
-  the SAME chat yourself — that will duplicate the message.
-- Do NOT narrate actions like "已回复群里：..." or "I replied in the
-  group with ..." — the text is the reply, not a report about it.
-- Other Feishu tools (lark-doc, lark-sheet, lark-calendar, messaging to
-  a DIFFERENT chat, etc.) are fine when the user explicitly asks for
-  them.
-
-If the tag contains "reply_to=<msg_id>", this message is a reply to that
-earlier Feishu message in the same chat. Treat the replied-to message as
-the likely subject when the user's instruction is short or has an unclear
-referent (e.g. "分析下", "看看", "翻译", "为什么", "解释下", "改下").
-To read its content, call:
-  lark-cli im +messages-mget --message-ids <msg_id> --as bot
-Do this BEFORE asking the user for clarification.
-
-Prompts without the [Feishu ...] tag come from the CLI directly and
-don't need these constraints.
-`.trim();
+// Re-export the preamble so existing imports keep working.
+export { BOT_RELAY_PREAMBLE } from "./preamble.js";
 
 function pickPreview(input: unknown, maxLen: number): string | undefined {
   if (!input || typeof input !== "object") return undefined;
@@ -133,7 +104,13 @@ export async function askAgent(opts: {
     replier.setActiveModel(info?.name || finalState.currentModelId);
   }
 
-  const finalPrompt = `${BOT_RELAY_PREAMBLE}\n\n${prompt}`;
+  // Backends that expose a session-level system-prompt slot (claude via
+  // _meta.systemPrompt) inject the preamble once at session create/load.
+  // Backends that don't (codex) declare a perTurnPreamble that we prepend
+  // every turn.
+  const finalPrompt = backend.perTurnPreamble
+    ? `${backend.perTurnPreamble}\n\n${prompt}`
+    : prompt;
   const blocks: ContentBlock[] = [{ type: "text", text: finalPrompt }];
 
   const cbs = {

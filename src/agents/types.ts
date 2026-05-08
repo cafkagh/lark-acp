@@ -18,11 +18,19 @@ export interface AgentBackend {
    */
   resolveSpawn(cwd: string): SpawnSpec | null;
   /**
-   * Optional system-style hint to prepend to every user prompt. ACP has no
-   * standard system-prompt slot — the agent's setup is opaque to us — so we
-   * piggyback on the prompt itself. Cost is ~150 tokens per turn.
+   * If set, the bridge prepends this text to every user prompt. Use for
+   * backends that don't expose a session-level system-prompt slot. Cost is
+   * paid per turn (typically prompt-cached on the API side).
    */
-  promptPreamble?: string;
+  perTurnPreamble?: string;
+  /**
+   * If set, gets merged into ACP `_meta` on session/new + session/load +
+   * session/resume calls. Use for backends that DO expose a session-level
+   * system-prompt slot via `_meta` (e.g. claude-agent-acp:
+   * `_meta.systemPrompt = { append }`). Injected once per session lifetime,
+   * cheaper than per-turn prepending.
+   */
+  sessionMeta?: Record<string, unknown>;
   /**
    * Quick liveness check at startup so /status can show which backends are
    * usable. Default impl in registry just checks resolveSpawn returns

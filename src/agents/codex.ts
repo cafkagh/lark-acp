@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentBackend, SpawnSpec } from "./types.js";
+import { BOT_RELAY_PREAMBLE } from "../preamble.js";
 
 // Codex ACP server. Provided by `@zed-industries/codex-acp` (binary `codex-acp`).
 // Auth comes from one of: CODEX_API_KEY, OPENAI_API_KEY, or a logged-in
@@ -38,5 +39,9 @@ export const codexBackend: AgentBackend = {
     // works for users who didn't run our `npm install` yet.
     return { command: "npx", args: ["-y", PKG], env: {} };
   },
-  promptPreamble: undefined, // applied by bridge
+  // codex-acp doesn't (yet) expose a session-level system-prompt knob, so
+  // we fall back to per-turn injection. Codex DOES auto-load AGENTS.md from
+  // cwd as a developer message, but writing AGENTS.md into a chat workdir
+  // could clobber a real project's file — leave that as a future opt-in.
+  perTurnPreamble: BOT_RELAY_PREAMBLE,
 };
